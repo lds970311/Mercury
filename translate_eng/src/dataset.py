@@ -1,39 +1,43 @@
-# 自定义DataSet
-import pandas as pd
-import torch
-from torch.utils.data import Dataset, DataLoader
+"""JSONL 翻译数据集与 DataLoader 构建。"""
+import json
+from pathlib import Path
 
-from config import PROCESSED_DIR, BATCH_SIZE
+import torch
+from torch.utils.data import DataLoader, Dataset
+
+from config import BATCH_SIZE, PROCESSED_DIR
 
 
 class TranslationDataset(Dataset):
-    """封装预处理后的 jsonl 平行语料数据集, 按索引返回 (源序列, 目标序列) 张量"""
+    """每条样本返回定长的中文源序列和英文目标序列。"""
 
-    def __init__(self, path):
-        self.data = pd.read_json(path, lines=True).to_dict("records")
+    def __init__(self, path: str | Path):
+        path = Path(path)
+        if not path.is_file():
+            raise FileNotFoundError(f"数据集不存在，请先运行预处理：{path}")
 
-    def __len__(self):
-        return len(self.data)
+        with path.open("r", encoding="utf-8") as file:
+            self.samples = [json.loads(line) for line in file if line.strip()]
 
-    def __getitem__(self, idx):
-        src_tensor = torch.tensor(self.data[idx]["src"], dtype=torch.long)
-        tgt_tensor = torch.tensor(self.data[idx]["tgt"], dtype=torch.long)
-        return src_tensor, tgt_tensor
+    def __len__(self) -> int:
+        return len(self.samples)
 
-
-def get_dataloader(is_train=True):
-    """按 is_train 加载训练集或测试集的 DataLoader"""
-    if is_train:
-        path = PROCESSED_DIR / "indexed_train_dataset.jsonl"
-    else:
-        path = PROCESSED_DIR / "indexed_test_dataset.jsonl"
-    dataset = TranslationDataset(path)
-
-    return DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=is_train)
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        sample = self.samples[index]
+        return (
+            torch.tensor(sample["src"], dtype=torch.long),
+            torch.tensor(sample["tgt"], dtype=torch.long),
+        )
 
 
-if __name__ == '__main__':
-    dataloader = get_dataloader(is_train=True)
-    test_data_loader = get_dataloader(is_train=False)
-    print(f"训练集 batch 数: {len(dataloader)}")
-    print(f"测试集 batch 数: {len(test_data_loader)}")
+def get_dataloader(split: str = "train", batch_size: int = BATCH_SIZE) -> DataLoader:
+    if split not in {"train", "test"}:
+        raise ValueError("split 仅支持 'train' 或 'test'")
+
+    dataset = TranslationDataset(PROCESSED_DIR / f"indexed_{split}_dataset.jsonl")
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=split == "train",
+        pin_memory=torch.cuda.is_available(),
+    )
